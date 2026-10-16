@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>net.minecraft-i2p</groupId>
+    <artifactId>minecraft-i2p</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- I2P Core API -->
+        <dependency>
+            <groupId>net.i2p</groupId>
+            <artifactId>i2p</artifactId>
+            <version>2.13.0</version>
+        </dependency>
+        <!-- Router (embedded I2P router) -->
+        <dependency>
+            <groupId>net.i2p</groupId>
+            <artifactId>router</artifactId>
+            <version>2.13.0</version>
+        </dependency>
+        <!-- I2PTunnel (client/server tunnel API) -->
+        <dependency>
+            <groupId>net.i2p</groupId>
+            <artifactId>i2ptunnel</artifactId>
+            <version>2.13.0</version>
+        </dependency>
+        <!-- Streaming (TCP-like sockets over I2P) -->
+        <dependency>
+            <groupId>net.i2p.client</groupId>
+            <artifactId>streaming</artifactId>
+            <version>2.13.0</version>
+        </dependency>
+        <!-- Ministreaming (base streaming API) -->
+        <dependency>
+            <groupId>net.i2p.client</groupId>
+            <artifactId>mstreaming</artifactId>
+            <version>2.13.0</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <sourceDirectory>src</sourceDirectory>
+        <plugins>
+            <!-- Compiler plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+
+            <!-- Shade plugin: creates a single executable fat JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <!-- Sets the Main-Class in the generated MANIFEST.MF -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>MinecraftI2P</mainClass>
+                                </transformer>
+                                <!-- Merges META-INF/services files from all dependencies -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <!-- Removes signature files that would break the shaded JAR -->
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

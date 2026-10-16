@@ -208,34 +208,15 @@ minecraft-i2p/
 ├── src/
 │   └── MinecraftI2P.java
 ├── lib/
-│   ├── i2p.jar
-│   ├── router.jar
 │   ├── i2ptunnel.jar
-│   ├── streaming.jar
-│   └── mstreaming.jar
-├── build/
-└── MANIFEST.MF
 ```
 
-### `MANIFEST.MF`
-
-```
-Manifest-Version: 1.0
-Main-Class: MinecraftI2P
-Class-Path: lib/i2p.jar lib/router.jar lib/i2ptunnel.jar lib/streaming.jar lib/mstreaming.jar
-
-```
-(Note: a trailing blank line is required.)
 
 ### Build commands
 
 ```bash
-# Compile
-mkdir -p build/classes
-javac -encoding UTF-8 -cp "lib/*" -d build/classes src/MinecraftI2P.java
-
-# Package
-jar cfm build/minecraft-i2p.jar MANIFEST.MF -C build/classes .
+mvn install:install-file -Dfile=src/lib/i2ptunnel.jar -DgroupId=net.i2p -DartifactId=i2ptunnel -Dversion=2.13.0 -Dpackaging=jar -DgeneratePom=true
+mvn clean package
 ```
 
 ### Run
@@ -279,9 +260,15 @@ java -jar minecraft-i2p.jar --dest=<that-address>.b32.i2p
 
 ---
 
-## License
+## Dependencies
 
-No license specified. Add one if you plan to distribute this project.
+```sh
+sudo apt install openjdk-25-jdk
+java -version
+sudo update-alternatives --config java
+sudo apt install maven
+mvn -version
+```
 
 ---
 
