@@ -396,13 +396,25 @@ public class MinecraftI2P {
         System.out.println("[I2P] Starting embedded router (headless)...");
         try {
             router = new Router();
-            router.runRouter();
-            System.out.println("[I2P] Router started.");
-            if (MODE.equals("server")) {
-                System.out.println("[I2P] Web console: http://127.0.0.1:7657");
-            }
         } catch (Exception e) {
-            throw new Exception("Failed to start I2P router: " + e.getMessage(), e);
+            throw new Exception("Failed to create I2P router: " + e.getMessage(), e);
+        }
+
+        // Router.runRouter() blocks until the router shuts down, so it MUST
+        // run in its own thread — otherwise setupTunnel() is never reached.
+        Thread routerThread = new Thread(() -> {
+            try {
+                router.runRouter();
+            } catch (Exception e) {
+                System.err.println("[I2P] Router terminated: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }, "I2P-Router");
+        routerThread.start();
+
+        System.out.println("[I2P] Router thread started.");
+        if (MODE.equals("server")) {
+            System.out.println("[I2P] Web console: http://127.0.0.1:7657");
         }
     }
 
@@ -452,10 +464,13 @@ public class MinecraftI2P {
         System.out.println("[I2P]   Length  : " + TUNNEL_LENGTH + " (fixed)");
         System.out.println("[I2P]   Quantity: " + inboundQuantityStr(opts));
 
+        // Client-type tunnels listen locally, so the keys are listenHost/listenPort
+        // (targetHost/targetPort are server-type keys) and the remote endpoint
+        // is 'targetDestination' (TunnelController.PROP_DEST).
         opts.setProperty("type", "client");
-        opts.setProperty("targetHost", host);
-        opts.setProperty("targetPort", String.valueOf(port));
-        opts.setProperty("destination", destination);
+        opts.setProperty("listenHost", host);
+        opts.setProperty("listenPort", String.valueOf(port));
+        opts.setProperty("targetDestination", destination);
         opts.setProperty("sharedClient", String.valueOf(sharedClient));
 
         startController(opts);
@@ -638,6 +653,12 @@ public class MinecraftI2P {
             }
 
             if (router != null) {
+                System.out.println("[SHUTDOWN] Stopping router (graceful)...");
+                try {
+                    router.shutdownGracefully();
+                } catch (Exception e) {
+                    System.err.println("[SHUTDOWN] Error stopping router: " + e.getMessage());
+                }
                 router = null;
                 System.out.println("[SHUTDOWN] Router stopped.");
             }

@@ -205,10 +205,15 @@ documented inline. Key points:
 
 ```
 minecraft-i2p/
+├── pom.xml
 ├── src/
-│   └── MinecraftI2P.java
-├── lib/
-│   ├── i2ptunnel.jar
+│   ├── MinecraftI2P.java
+│   └── lib/
+│       └── i2ptunnel.jar          # installed into the local Maven repo (see below)
+├── target/                        # Maven build output
+│   └── minecraft-i2p-1.0.1.jar    # shaded fat JAR (executable)
+└── dist/
+    └── minecraft-i2p.jar          # renamed copy of the fat JAR for distribution
 ```
 
 
@@ -219,11 +224,23 @@ mvn install:install-file -Dfile=src/lib/i2ptunnel.jar -DgroupId=net.i2p -Dartifa
 mvn clean package
 ```
 
+The first command only needs to run once — it registers the local `i2ptunnel.jar`
+in your Maven repository. The other I2P dependencies are resolved from Maven Central.
+
 ### Run
 
+The shaded fat JAR is produced at `target/minecraft-i2p-1.0.1.jar`
+(the version number comes from `pom.xml`):
+
 ```bash
-java -jar build/minecraft-i2p.jar --dest=myserver.b32.i2p
-java -jar build/minecraft-i2p.jar --mode=server
+java -jar target/minecraft-i2p-1.0.1.jar --dest=myserver.b32.i2p
+java -jar target/minecraft-i2p-1.0.1.jar --mode=server
+```
+
+For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:
+
+```bash
+java -jar dist/minecraft-i2p.jar --dest=myserver.b32.i2p
 ```
 
 ---
@@ -262,12 +279,18 @@ java -jar minecraft-i2p.jar --dest=<that-address>.b32.i2p
 
 ## Dependencies
 
+Requires **JDK 17 or newer** and **Maven**. Example installation on Debian/Ubuntu:
+
 ```sh
-sudo apt install openjdk-25-jdk
-java -version
-sudo update-alternatives --config java
-sudo apt install maven
+sudo apt install openjdk-17-jdk maven
+java -version    # must report 17 or newer
 mvn -version
+```
+
+If you have multiple JDKs installed, select the default with:
+
+```sh
+sudo update-alternatives --config java
 ```
 
 ---
