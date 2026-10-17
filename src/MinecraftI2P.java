@@ -15,6 +15,24 @@ import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * minecraft-i2p - Universal I2P wrapper for Minecraft
+ *
+ * Usage:
+ *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar
+ *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=X.b32.i2p
+ *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=X.b32.i2p
+ *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server
+ *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --config=custom.properties
+ *
+ * Default files (all under ~/.minecraft-i2p/):
+ *   minecraft-i2p.properties   - editable configuration
+ *   minecraft-server.dat       - server private key (backup!)
+ *   i2p_core/                  - I2P router state (regenerable)
+ *
+ * On first run, the properties file is generated automatically.
+ * Tunnel length is hardcoded to 1 (lowest latency). Quantity is configurable.
+ */
 public class MinecraftI2P {
 
     // ==========================================================
@@ -28,11 +46,17 @@ public class MinecraftI2P {
     private static final String TUNNEL_LENGTH = "1"; // hardcoded
     private static final String PLACEHOLDER_DEST = "REPLACE_WITH_YOUR_ADDRESS.b32.i2p";
 
+    // ==========================================================
+    // STATIC STATE (arg parsing)
+    // ==========================================================
     private static String MODE = "client";
-    private static String CONFIG_PATH = null;
-    private static String DEST_OVERRIDE = null;
-    private static String DEST_EPHEMERAL = null;
+    private static String CONFIG_PATH = null;      // resolved in main
+    private static String DEST_OVERRIDE = null;    // --dest=          (persists)
+    private static String DEST_EPHEMERAL = null;   // --dest-override= (does not persist)
 
+    // ==========================================================
+    // INSTANCE STATE
+    // ==========================================================
     private Properties config;
     private Router router;
     private TunnelControllerGroup controllerGroup;
@@ -59,6 +83,7 @@ public class MinecraftI2P {
             }
         }
 
+        // Validations
         if (!MODE.equals("client") && !MODE.equals("server")) {
             System.err.println("Error: --mode must be 'client' or 'server'.");
             printUsage();
@@ -73,6 +98,7 @@ public class MinecraftI2P {
             System.exit(1);
         }
 
+        // Create user directory if needed
         try {
             Files.createDirectories(USER_DIR);
         } catch (IOException e) {
@@ -80,6 +106,7 @@ public class MinecraftI2P {
             System.exit(1);
         }
 
+        // Default config: inside the user directory
         if (CONFIG_PATH == null) {
             CONFIG_PATH = USER_DIR.resolve(DEFAULT_CONFIG_NAME).toString();
         }
@@ -96,7 +123,7 @@ public class MinecraftI2P {
     }
 
     private static void printUsage() {
-        System.out.println("Usage: java -jar minecraft-i2p.jar [options]");
+        System.out.println("Usage: java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar [options]");
         System.out.println();
         System.out.println("Options:");
         System.out.println("  --mode=client|server       Mode (default: client)");
@@ -104,6 +131,16 @@ public class MinecraftI2P {
         System.out.println("  --dest-override=<b32.i2p>  Client destination. Does NOT persist.");
         System.out.println("  --config=<file>            Custom .properties file");
         System.out.println("  --help, -h                 Show this help");
+        System.out.println();
+        System.out.println("Default files:");
+        System.out.println("  Config : " + USER_DIR.resolve(DEFAULT_CONFIG_NAME));
+        System.out.println("  Key    : " + USER_DIR.resolve(DEFAULT_KEY_NAME));
+        System.out.println("  I2P    : " + USER_DIR.resolve("i2p_core"));
+        System.out.println();
+        System.out.println("Examples:");
+        System.out.println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=myserver.b32.i2p");
+        System.out.println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=test.b32.i2p");
+        System.out.println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server");
     }
 
     // ==========================================================
@@ -155,6 +192,8 @@ public class MinecraftI2P {
     // ==========================================================
     private void ensureConfigExists() throws IOException {
         Path path = Paths.get(CONFIG_PATH);
+
+        // Case 1: file already exists
         if (Files.exists(path)) {
             if (DEST_OVERRIDE != null) {
                 updateDestinationInFile(path, DEST_OVERRIDE);
@@ -162,6 +201,7 @@ public class MinecraftI2P {
             return;
         }
 
+        // Case 2: file does not exist -> generate new one
         System.out.println("[CONFIG] File not found. Generating: " + path.toAbsolutePath());
 
         String destination;
@@ -183,24 +223,42 @@ public class MinecraftI2P {
         try (OutputStream out = Files.newOutputStream(path)) {
             out.write(content.getBytes(StandardCharsets.UTF_8));
         }
+
         System.out.println("[CONFIG] File generated successfully.");
+        System.out.println("[CONFIG] You can edit it to adjust the values.");
     }
 
+    /**
+     * Updates only the "destination = ..." line in the file,
+     * preserving comments and other properties in their original order.
+     */
     private void updateDestinationInFile(Path path, String newDest) throws IOException {
         String content = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
-        Pattern pattern = Pattern.compile("^(\\s*destination\\s*=\\s*)(.*)$", Pattern.MULTILINE);
+
+        Pattern pattern = Pattern.compile(
+            "^(\\s*destination\\s*=\\s*)(.*)$",
+            Pattern.MULTILINE
+        );
         Matcher matcher = pattern.matcher(content);
 
         if (!matcher.find()) {
-            content = content + "\n# Destination added automatically\ndestination = " + newDest + "\n";
+            System.out.println("[CONFIG] Key 'destination' not found. Appending.");
+            content = content + "\n# Destination added automatically\ndestination = "
+                + newDest + "\n";
         } else {
             String current = matcher.group(2).trim();
-            if (current.equals(newDest)) return;
-            System.out.println("[CONFIG] Updating destination: " + current + " -> " + newDest);
+            if (current.equals(newDest)) {
+                return; // nothing to do
+            }
+            System.out.println("[CONFIG] Updating destination:");
+            System.out.println("[CONFIG]   Before: " + current);
+            System.out.println("[CONFIG]   After : " + newDest);
             content = matcher.replaceFirst(
                 Matcher.quoteReplacement(matcher.group(1) + newDest));
         }
+
         Files.write(path, content.getBytes(StandardCharsets.UTF_8));
+        System.out.println("[CONFIG] File updated.");
     }
 
     private String buildDefaultConfig(String destination) {
@@ -210,25 +268,48 @@ public class MinecraftI2P {
         return "# =========================================================\n"
             + "# minecraft-i2p - Unified Configuration\n"
             + "# =========================================================\n"
+            + "# Automatically generated at: " + CONFIG_PATH + "\n"
+            + "# Edit as needed.\n"
+            + "#\n"
+            + "# Keys without a prefix are SHARED between modes.\n"
+            + "# 'destination' is used only in CLIENT mode.\n"
+            + "# 'keyFile' is used only in SERVER mode.\n"
+            + "# =========================================================\n"
             + "\n"
             + "# ---------- SHARED ----------\n"
             + "host = 127.0.0.1\n"
             + "port = 25565\n"
+            + "\n"
+            + "# I2P router state directory (can be deleted,\n"
+            + "# but this forces a full reseed on next run).\n"
             + "i2pConfigDir = " + i2pCorePath + "\n"
+            + "\n"
+            + "# I2P network warmup\n"
             + "warmupTimeoutSeconds = 300\n"
             + "warmupCheckIntervalSeconds = 10\n"
             + "\n"
             + "# ---------- TUNNEL ----------\n"
+            + "# Friendly tunnel name (shown in the I2P console)\n"
             + "tunnelName = Minecraft\n"
+            + "\n"
+            + "# Number of parallel tunnels (higher throughput, more CPU/bandwidth)\n"
+            + "# NOTE: length is always 1 (hardcoded). Not configurable.\n"
             + "inboundQuantity = 2\n"
             + "outboundQuantity = 2\n"
             + "\n"
             + "# ---------- CLIENT ----------\n"
+            + "# .b32.i2p address of the destination server (CLIENT mode)\n"
             + "destination = " + destination + "\n"
+            + "\n"
+            + "# Reuse tunnel for multiple simultaneous connections\n"
             + "sharedClient = true\n"
             + "\n"
             + "# ---------- SERVER ----------\n"
+            + "# Private key file (SERVER mode)\n"
+            + "# WARNING: back it up! This file defines your .b32.i2p address.\n"
             + "keyFile = " + keyFilePath + "\n"
+            + "\n"
+            + "# Friendly key name (shown in I2P as the destination name)\n"
             + "keyName = minecraft-server\n";
     }
 
@@ -293,16 +374,21 @@ public class MinecraftI2P {
     // I2P ROUTER
     // ==========================================================
     private void initializeRouter() throws Exception {
-        String configDir = optional("i2pConfigDir", USER_DIR.resolve("i2p_core").toString());
+        String configDir = optional("i2pConfigDir",
+            USER_DIR.resolve("i2p_core").toString());
 
         System.out.println("[I2P] Config directory: " + configDir);
         Path dirPath = Paths.get(configDir);
-        if (!Files.exists(dirPath)) Files.createDirectories(dirPath);
+        if (!Files.exists(dirPath)) {
+            Files.createDirectories(dirPath);
+        }
 
         System.setProperty("i2p.dir.config", dirPath.toAbsolutePath().toString());
         System.setProperty("i2p.dir.base", dirPath.toAbsolutePath().toString());
         System.setProperty("java.net.preferIPv4Stack", "true");
 
+        // Enable the web console ONLY in server mode — that's where the
+        // user needs to find the .b32.i2p address of the tunnel.
         if (MODE.equals("server")) {
             System.setProperty("i2p.router.console", "true");
         } else {
@@ -310,8 +396,23 @@ public class MinecraftI2P {
         }
 
         System.out.println("[I2P] Creating router...");
-        router = new Router();
+        try {
+            router = new Router();
+        } catch (Exception e) {
+            throw new Exception("Failed to create I2P router: " + e.getMessage(), e);
+        }
 
+        // CRITICAL for embedded use: prevent the router from killing the JVM
+        // on its own. We want our shutdown hook to control the lifecycle.
+        try {
+            router.setKillVMOnEnd(false);
+        } catch (Throwable t) {
+            System.out.println("[I2P] Note: setKillVMOnEnd unavailable: " + t.getMessage());
+        }
+
+        // Router.runRouter() blocks until the router shuts down, so it MUST
+        // run in its own daemon thread — otherwise the main thread would hang
+        // forever and setupTunnel() would never be reached.
         System.out.println("[I2P] Starting router thread...");
         Thread routerThread = new Thread(() -> {
             try {
@@ -344,8 +445,11 @@ public class MinecraftI2P {
         if (outboundQuantity < 1) outboundQuantity = 1;
 
         Properties opts = new Properties();
+
+        // Friendly tunnel name (no prefix — read by TunnelController directly)
         opts.setProperty("name", tunnelName);
-        // *** IMPORTANT: all keys below need the "option." prefix ***
+
+        // *** All tunnel options require the "option." prefix ***
         opts.setProperty("option.inbound.length", TUNNEL_LENGTH);
         opts.setProperty("option.outbound.length", TUNNEL_LENGTH);
         opts.setProperty("option.inbound.quantity", String.valueOf(inboundQuantity));
@@ -364,17 +468,21 @@ public class MinecraftI2P {
         String destination;
         if (DEST_EPHEMERAL != null) {
             destination = DEST_EPHEMERAL;
-            System.out.println("[I2P] Using ephemeral destination: " + destination);
+            System.out.println("[I2P] Using ephemeral destination (not persisted): " + destination);
         } else {
             destination = required("destination");
         }
+
         boolean sharedClient = optionalBool("sharedClient", true);
 
         System.out.println("[I2P] Creating CLIENT tunnel...");
         System.out.println("[I2P]   Listen  : " + host + ":" + port);
         System.out.println("[I2P]   Target  : " + destination);
+        System.out.println("[I2P]   Length  : " + TUNNEL_LENGTH + " (fixed)");
+        System.out.println("[I2P]   Quantity: " + inboundQuantityStr(opts));
 
-        // *** FIXED: keys now have the "option." prefix ***
+        // Client-type tunnels listen locally and forward to a remote destination.
+        // All keys below require the "option." prefix.
         opts.setProperty("option.type", "client");
         opts.setProperty("option.listenHost", host);
         opts.setProperty("option.listenPort", String.valueOf(port));
@@ -392,17 +500,22 @@ public class MinecraftI2P {
         System.out.println("[I2P] Creating SERVER tunnel...");
         System.out.println("[I2P]   Key     : " + keyFile);
         System.out.println("[I2P]   Forward : " + host + ":" + port);
+        System.out.println("[I2P]   Length  : " + TUNNEL_LENGTH + " (fixed)");
+        System.out.println("[I2P]   Quantity: " + inboundQuantityStr(opts));
 
         Path keyPath = Paths.get(keyFile);
         if (!Files.exists(keyPath)) {
-            System.out.println("[I2P] New key will be created at: " + keyPath.toAbsolutePath());
+            System.out.println("[I2P] New key. Will be created at: " + keyPath.toAbsolutePath());
             Path parent = keyPath.toAbsolutePath().getParent();
-            if (parent != null && !Files.exists(parent)) Files.createDirectories(parent);
+            if (parent != null && !Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
         } else {
             System.out.println("[I2P] Key found. Address preserved.");
         }
 
-        // *** FIXED: keys now have the "option." prefix ***
+        // Server-type tunnels accept I2P connections and forward them locally.
+        // All keys below require the "option." prefix.
         opts.setProperty("option.type", "server");
         opts.setProperty("option.targetHost", host);
         opts.setProperty("option.targetPort", String.valueOf(port));
@@ -413,14 +526,21 @@ public class MinecraftI2P {
         System.out.println("[I2P] Server tunnel active.");
     }
 
+    private String inboundQuantityStr(Properties opts) {
+        return opts.getProperty("option.inbound.quantity")
+            + "/" + opts.getProperty("option.outbound.quantity");
+    }
+
     private void startController(Properties opts) throws Exception {
         System.out.println("[DEBUG] startController() begin");
 
+        // Wait for the I2P context to be fully populated.
+        // The ClientAppManager is required by the TunnelControllerGroup constructor.
         I2PAppContext ctx = null;
         ClientAppManager mgr = null;
 
         int attempts = 0;
-        while (attempts < 30) {
+        while (attempts < 30) { // up to 30 seconds
             ctx = I2PAppContext.getGlobalContext();
             mgr = ctx.clientAppManager();
             if (mgr != null) {
@@ -433,7 +553,8 @@ public class MinecraftI2P {
         }
 
         if (mgr == null) {
-            throw new Exception("ClientAppManager still null after 30s.");
+            throw new Exception("I2P ClientAppManager is still null after 30s. "
+                + "Router may have failed to start.");
         }
 
         System.out.println("[DEBUG] Creating TunnelControllerGroup...");
@@ -457,8 +578,9 @@ public class MinecraftI2P {
         int timeoutSec = optionalInt("warmupTimeoutSeconds", 300);
         int intervalSec = optionalInt("warmupCheckIntervalSeconds", 10);
 
-        System.out.println("[WARMUP] Waiting for router to become alive...");
+        System.out.println("[WARMUP] Waiting for I2P router to become alive...");
         System.out.println("[WARMUP] Max timeout: " + timeoutSec + "s");
+        System.out.println("[WARMUP] First run can take several minutes (reseed).");
 
         long start = System.currentTimeMillis();
         long timeoutMs = timeoutSec * 1000L;
@@ -480,7 +602,8 @@ public class MinecraftI2P {
                 return;
             }
         }
-        System.err.println("[WARMUP] Timeout. Proceeding anyway.");
+
+        System.err.println("[WARMUP] Timeout waiting for router. Proceeding anyway.");
     }
 
     private boolean isRouterAlive() {
@@ -531,6 +654,10 @@ public class MinecraftI2P {
         System.out.println();
         System.out.println("  Look for the tunnel named: \"" + tunnelName + "\"");
         System.out.println("  Copy the .b32.i2p address shown next to it.");
+        System.out.println("  Share it with your players.");
+        System.out.println();
+        System.out.println("  Players connect using:");
+        System.out.println("      java -jar minecraft-i2p.jar --dest=<that-address>.b32.i2p");
         System.out.println();
         System.out.println("  Press Ctrl+C to stop.");
         System.out.println("========================================");
@@ -552,14 +679,18 @@ public class MinecraftI2P {
                     System.err.println("[SHUTDOWN] Error stopping tunnel: " + e.getMessage());
                 }
             }
+
             if (router != null) {
+                System.out.println("[SHUTDOWN] Stopping router (graceful)...");
                 try {
                     router.shutdownGracefully();
                 } catch (Exception e) {
                     System.err.println("[SHUTDOWN] Error stopping router: " + e.getMessage());
                 }
                 router = null;
+                System.out.println("[SHUTDOWN] Router stopped.");
             }
+
             System.out.println("[SHUTDOWN] Done.");
         }
     }

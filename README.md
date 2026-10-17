@@ -56,14 +56,14 @@ Place `minecraft-i2p.jar` next to a `lib/` directory containing the I2P JARs lis
 Connect to a hidden Minecraft server:
 
 ```bash
-java -jar minecraft-i2p.jar --dest=myserver.b32.i2p
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=myserver.b32.i2p
 ```
 
 The first run generates `~/.minecraft-i2p/minecraft-i2p.properties` with the
 destination saved. Subsequent runs just need:
 
 ```bash
-java -jar minecraft-i2p.jar
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar
 ```
 
 When the console prints **READY TO PLAY**, open Minecraft and connect to
@@ -74,7 +74,7 @@ When the console prints **READY TO PLAY**, open Minecraft and connect to
 Host a Minecraft server hidden behind I2P:
 
 ```bash
-java -jar minecraft-i2p.jar --mode=server
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server
 ```
 
 The first run generates:
@@ -106,19 +106,19 @@ Share the `.b32.i2p` address derived from your key file with your players.
 
 ```bash
 # First-time client setup — saves destination
-java -jar minecraft-i2p.jar --dest=abc123xyz.b32.i2p
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=abc123xyz.b32.i2p
 
 # Subsequent client runs
-java -jar minecraft-i2p.jar
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar
 
 # Permanently switch to a different server
-java -jar minecraft-i2p.jar --dest=otherserver.b32.i2p
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=otherserver.b32.i2p
 
 # Test a server without overwriting the saved destination
-java -jar minecraft-i2p.jar --dest-override=test.b32.i2p
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=test.b32.i2p
 
 # Start server mode
-java -jar minecraft-i2p.jar --mode=server
+java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server
 ```
 
 ---
@@ -282,8 +282,8 @@ java -jar minecraft-i2p.jar --dest=<that-address>.b32.i2p
 Requires **JDK 17 or newer** and **Maven**. Example installation on Debian/Ubuntu:
 
 ```sh
-sudo apt install openjdk-17-jdk maven
-java -version    # must report 17 or newer
+sudo apt install openjdk-25-jdk maven
+java -version    # must report 25 or newer
 mvn -version
 ```
 
