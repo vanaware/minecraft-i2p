@@ -392,3 +392,9 @@ sudo update-alternatives --config java
 
 - The I2P project for the embedded router and tunnel APIs.
 - The Minecraft community for protocol documentation.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+Third-party components and their licenses are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
