@@ -30,12 +30,11 @@ user, keeping the wrapper focused on one job: **networking**.
 - **Java 17 or newer** (JDK or JRE) to run. **JDK 24 or newer is
   recommended.**
 - About `--enable-native-access=ALL-UNNAMED`, which appears in the examples
-  below: it only matters on **JDK 24+**, where it silences a harmless
-  "restricted method" warning emitted when I2P's `jbigi` library loads
-  native code. On **JDK 17–23** the flag has no effect and can be omitted;
-  on the oldest JDKs it is not recognized and the JVM refuses to start — if
-  that happens, simply drop the flag. Everything works identically either
-  way.
+  below: it is a **no-op on JDK 17–23** and only matters on **JDK 24+**,
+  where it silences a harmless "restricted method" warning emitted when
+  I2P's `jbigi` library loads native code. The option has existed since
+  JDK 16, so every example here runs as written on any supported JDK; on
+  JDK 24+ without the flag the app still works, it just prints the warning.
 - The following I2P JARs on the classpath (bundled in `lib/` or shaded into the JAR):
   - `i2p.jar`
   - `router.jar`
@@ -67,7 +66,7 @@ Connect to a hidden Minecraft server:
 # JDK 24+ (recommended setup — silences the jbigi warning)
 java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=myserver.b32.i2p
 
-# JDK 17–23 (the flag is a no-op there; omit it)
+# JDK 17–23 (the flag is a no-op there, but harmless to include)
 java -jar minecraft-i2p.jar --dest=myserver.b32.i2p
 ```
 
@@ -229,7 +228,7 @@ minecraft-i2p/
 │   └── lib/
 │       └── i2ptunnel.jar          # installed into the local Maven repo (see below)
 ├── target/                        # Maven build output
-│   └── minecraft-i2p-1.1.2.jar    # shaded fat JAR (executable)
+│   └── minecraft-i2p-1.1.3.jar    # shaded fat JAR (executable)
 └── dist/
     └── minecraft-i2p.jar          # renamed copy of the fat JAR for distribution
 ```
@@ -247,12 +246,12 @@ in your Maven repository. The other I2P dependencies are resolved from Maven Cen
 
 ### Run
 
-The shaded fat JAR is produced at `target/minecraft-i2p-1.1.2.jar`
+The shaded fat JAR is produced at `target/minecraft-i2p-1.1.3.jar`
 (the version number comes from `pom.xml`):
 
 ```bash
-java -jar target/minecraft-i2p-1.1.2.jar --dest=myserver.b32.i2p
-java -jar target/minecraft-i2p-1.1.2.jar --mode=server
+java -jar target/minecraft-i2p-1.1.3.jar --dest=myserver.b32.i2p
+java -jar target/minecraft-i2p-1.1.3.jar --mode=server
 ```
 
 For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:
@@ -333,7 +332,7 @@ mvn -version
 > On newer Debian/Ubuntu releases the OpenJDK 17 package may have been
 > removed in favor of newer JDKs. `default-jdk` always installs the current
 > supported default (JDK 21 on Debian 13). JDK 21 runs everything fine —
-> just omit the `--enable-native-access` flag (see
+> the `--enable-native-access` flag is simply a no-op there (see
 > [Requirements](#requirements)).
 
 If you have multiple JDKs installed, select the default with:

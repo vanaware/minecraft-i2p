@@ -29,7 +29,8 @@ import java.util.regex.Pattern;
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --config=custom.properties
  *
  * The --enable-native-access flag only matters on JDK 24+ (it silences a
- * harmless jbigi warning); omit it on JDK 17-23.
+ * harmless jbigi warning); it is a no-op on JDK 17-23 and accepted by all
+ * supported launchers.
  *
  * Default files (all under ~/.minecraft-i2p/):
  *   minecraft-i2p.properties   - editable configuration
@@ -230,9 +231,10 @@ public class MinecraftI2P {
         println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server");
         println();
         println("Note:");
-        println("  --enable-native-access only matters on JDK 24+ (it silences");
-        println("  a harmless jbigi warning). Omit it on JDK 17-23; on older");
-        println("  JDKs it is unrecognized and the JVM will not start.");
+        println("  --enable-native-access is a no-op on JDK 17-23.");
+        println("  On JDK 24+ it silences a harmless jbigi warning.");
+        println("  The option exists since JDK 16, so every supported JDK");
+        println("  (17+) accepts it.");
     }
 
     // ==========================================================
