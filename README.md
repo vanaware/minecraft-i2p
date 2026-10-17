@@ -97,8 +97,8 @@ Share the `.b32.i2p` address derived from your key file with your players.
 | Option | Description |
 |---|---|
 | `--mode=client\|server` | Operation mode. Default: `client`. |
-| `--dest=<b32.i2p>` | Client destination. **Persists** to the config file. |
-| `--dest-override=<b32.i2p>` | Client destination. **Does not persist** — useful for testing. |
+| `--dest=<b32.i2p>` | Target address. **Client mode only.** **Persists** to the config file. |
+| `--dest-override=<b32.i2p>` | Target address. **Client mode only.** **Does not persist** — useful for testing. |
 | `--config=<file>` | Use a custom `.properties` file. |
 | `--help`, `-h` | Show usage. |
 
@@ -211,7 +211,7 @@ minecraft-i2p/
 │   └── lib/
 │       └── i2ptunnel.jar          # installed into the local Maven repo (see below)
 ├── target/                        # Maven build output
-│   └── minecraft-i2p-1.1.0.jar    # shaded fat JAR (executable)
+│   └── minecraft-i2p-1.1.1.jar    # shaded fat JAR (executable)
 └── dist/
     └── minecraft-i2p.jar          # renamed copy of the fat JAR for distribution
 ```
@@ -229,12 +229,12 @@ in your Maven repository. The other I2P dependencies are resolved from Maven Cen
 
 ### Run
 
-The shaded fat JAR is produced at `target/minecraft-i2p-1.1.0.jar`
+The shaded fat JAR is produced at `target/minecraft-i2p-1.1.1.jar`
 (the version number comes from `pom.xml`):
 
 ```bash
-java -jar target/minecraft-i2p-1.1.0.jar --dest=myserver.b32.i2p
-java -jar target/minecraft-i2p-1.1.0.jar --mode=server
+java -jar target/minecraft-i2p-1.1.1.jar --dest=myserver.b32.i2p
+java -jar target/minecraft-i2p-1.1.1.jar --mode=server
 ```
 
 For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:

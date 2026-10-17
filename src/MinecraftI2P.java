@@ -147,14 +147,18 @@ public class MinecraftI2P {
     }
 
     /**
-     * A .b32.i2p address is 52 base32 chars of the destination hash plus the
-     * literal "aaaa" suffix (56 chars total). Catches typos early with a
-     * clear message instead of a cryptic failure deep inside the tunnel code.
+     * A .b32.i2p address is the Base32 encoding of the destination hash.
+     * I2P 2.x produces the 52-char form (what Destination.toBase32() and the
+     * console show); the legacy 56-char form appends "aaaa" padding. Both
+     * decode to the same 32-byte hash (verified against i2p.jar Base32).
+     * Catches typos early with a clear message instead of a cryptic failure
+     * deep inside the tunnel code.
      */
     private static void validateDestination(String dest) {
-        if (!dest.matches("[a-z2-7]{52}aaaa\\.b32\\.i2p")) {
+        if (!dest.matches("[a-z2-7]{52}(?:aaaa)?\\.b32\\.i2p")) {
             printErr("[ERROR] Invalid destination format: '" + dest + "'");
-            printErr("        Expected: 56 characters (52 of a-z/2-7 + 'aaaa') followed by .b32.i2p");
+            printErr("        Expected: 52 base32 chars (a-z, 2-7), optionally");
+            printErr("        followed by 'aaaa', then .b32.i2p");
             System.exit(1);
         }
     }
@@ -164,8 +168,10 @@ public class MinecraftI2P {
         println();
         println("Options:");
         println("  --mode=client|server       Mode (default: client)");
-        println("  --dest=<b32.i2p>           Client destination. Persists to config.");
-        println("  --dest-override=<b32.i2p>  Client destination. Does NOT persist.");
+        println("  --dest=<b32.i2p>           Target address. CLIENT mode only.");
+        println("                             Persists to config.");
+        println("  --dest-override=<b32.i2p>  Target address. CLIENT mode only.");
+        println("                             Does NOT persist.");
         println("  --config=<file>            Custom .properties file");
         println("  --help, -h                 Show this help");
         println();
@@ -445,6 +451,12 @@ public class MinecraftI2P {
 
         // Router.runRouter() blocks until the router shuts down, so it MUST
         // run in its own thread — otherwise setupTunnel() is never reached.
+        //
+        // Throwable (not Exception) on purpose: this thread is the last
+        // witness to a dying router. We record the failure so the main loop
+        // and warmup stop pretending everything is fine, then print it while
+        // stderr still works — swallowing an Error here is better than an
+        // unreported thread death, since nothing else in the JVM notices.
         Thread routerThread = new Thread(() -> {
             try {
                 router.runRouter();
@@ -596,7 +608,7 @@ public class MinecraftI2P {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                break;
+                throw new IOException("Interrupted while waiting for the I2P app manager", e);
             }
             waitedSec++;
         }
@@ -653,7 +665,7 @@ public class MinecraftI2P {
 
             try { Thread.sleep(intervalMs); } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                throw new IOException("Interrupted during warmup", e);
             }
         }
 
@@ -703,15 +715,15 @@ public class MinecraftI2P {
         println("  3. Set online-mode=false in server.properties");
         println();
         println("  --- Your server's .b32.i2p address ---");
-        String b32 = getServerB32Address();
+        String b32 = waitForServerB32Address(30);
         if (b32 != null) {
             println("  " + b32);
             println();
             println("  Players connect using:");
             println("      java -jar minecraft-i2p.jar --dest=" + b32);
         } else {
-            println("  (address not available yet - check the console");
-            println("   output again after the tunnel is built)");
+            println("  (no address yet — the key file was not generated within");
+            println("   30s. Run the program again in a few minutes.)");
         }
         println();
         println("  NOTE: the first tunnel build can take several");
@@ -721,12 +733,34 @@ public class MinecraftI2P {
     }
 
     /**
+     * On a FIRST server run the key file is created by the tunnel's
+     * background startup (startTunnelBackground returns immediately), so it
+     * may not exist yet when instructions are printed. Poll briefly instead
+     * of showing "not available" for something that appears seconds later.
+     */
+    private String waitForServerB32Address(int maxWaitSec) {
+        println("[I2P] Waiting for the private key to be generated...");
+        for (int waited = 0; waited < maxWaitSec; waited++) {
+            String b32 = getServerB32Address();
+            if (b32 != null) return b32;
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return getServerB32Address();
+    }
+
+    /**
      * The .b32.i2p address is fully determined by the server private key
      * file, so we derive it directly from the key instead of waiting for the
      * tunnel's I2P session (which only exists once the network is reachable).
      * Destination.create(InputStream) is the same factory I2P uses to read
      * key files; toBase32() is what the console displays (via
      * TunnelController.getMyDestHashBase32()).
+     * Returns null if the key does not exist (yet) — safe to poll.
      */
     private String getServerB32Address() {
         String keyFile = config != null ? config.getProperty("keyFile") : null;
@@ -739,7 +773,7 @@ public class MinecraftI2P {
             if (b32 == null || b32.isEmpty()) return null;
             return b32.endsWith(".b32.i2p") ? b32 : b32 + ".b32.i2p";
         } catch (Exception e) {
-            printErr("[I2P] Could not read the tunnel address from " + path + ": " + e);
+            // Key may be half-written while the background tunnel creates it.
             return null;
         }
     }
