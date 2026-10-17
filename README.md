@@ -115,6 +115,8 @@ it is printed in the **SERVER READY** block (see
 | `--dest=<b32.i2p>` | Target address. **Client mode only.** **Persists** to the config file. |
 | `--dest-override=<b32.i2p>` | Target address. **Client mode only.** **Does not persist** — useful for testing. |
 | `--config=<file>` | Use a custom `.properties` file. Relative paths resolve against the current directory (not `~/.minecraft-i2p/`). |
+| `--check` | Validate the config file and exit. **No router started** — exit code 0/1, safe for scripts and CI. |
+| `--print-address` | Print the server's `.b32.i2p` address (from the key file) and exit. **No router started** — raw address on stdout, script-friendly. |
 | `--help`, `-h` | Show usage. |
 
 ### Examples
@@ -134,6 +136,12 @@ java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=t
 
 # Start server mode
 java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server
+
+# Validate config without starting the router (CI / pre-flight)
+java -jar minecraft-i2p.jar --check || exit 1
+
+# Get the server address in a script (run on the server machine)
+ADDR=$(java -jar minecraft-i2p.jar --print-address)
 ```
 
 ---
@@ -227,8 +235,10 @@ minecraft-i2p/
 │   ├── MinecraftI2P.java
 │   └── lib/
 │       └── i2ptunnel.jar          # installed into the local Maven repo (see below)
+├── tests/
+│   └── run-tests.sh               # regression suite (offline + --live lifecycle)
 ├── target/                        # Maven build output
-│   └── minecraft-i2p-1.1.3.jar    # shaded fat JAR (executable)
+│   └── minecraft-i2p-1.2.0.jar    # shaded fat JAR (executable)
 └── dist/
     └── minecraft-i2p.jar          # renamed copy of the fat JAR for distribution
 ```
@@ -246,12 +256,12 @@ in your Maven repository. The other I2P dependencies are resolved from Maven Cen
 
 ### Run
 
-The shaded fat JAR is produced at `target/minecraft-i2p-1.1.3.jar`
+The shaded fat JAR is produced at `target/minecraft-i2p-1.2.0.jar`
 (the version number comes from `pom.xml`):
 
 ```bash
-java -jar target/minecraft-i2p-1.1.3.jar --dest=myserver.b32.i2p
-java -jar target/minecraft-i2p-1.1.3.jar --mode=server
+java -jar target/minecraft-i2p-1.2.0.jar --dest=myserver.b32.i2p
+java -jar target/minecraft-i2p-1.2.0.jar --mode=server
 ```
 
 For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:
@@ -259,6 +269,22 @@ For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:
 ```bash
 java -jar dist/minecraft-i2p.jar --dest=myserver.b32.i2p
 ```
+
+### Running the tests
+
+```bash
+bash tests/run-tests.sh          # offline suite — seconds, no router started
+bash tests/run-tests.sh --live   # + full lifecycle — 2-5 minutes
+```
+
+The offline suite covers argument parsing and rejection, `--check`, and
+`--print-address` against crafted configs (uses `mktemp` for its data home;
+no network needed). The `--live` run additionally boots a real server-mode
+first run in a pristine home, verifies the printed `.b32.i2p` address,
+stops the process gracefully (SIGTERM triggers the same shutdown hooks as
+Ctrl+C), and checks that `--print-address` and `--check` agree with the
+live run — all without requiring I2P network connectivity. Set `JAR=path`
+to test a specific build; exit code is 0 only if everything passes.
 
 ---
 
@@ -310,6 +336,25 @@ it; everything the wrapper prints is in the terminal.
   prints `[I2P] Tunnel is now ACTIVE` when it succeeds — Minecraft
   connections fail until then. If it never appears, check
   `~/.minecraft-i2p/logs/minecraft-i2p.log`.
+
+---
+
+## Troubleshooting
+
+All wrapper output is also logged to `~/.minecraft-i2p/logs/minecraft-i2p.log`
+(rotated to `minecraft-i2p.log.old` past 1 MB). `--check` validates the
+config without starting the router.
+
+| Symptom | What to check |
+|---|---|
+| Minecraft says "can't connect" right after **READY TO PLAY** | The tunnel is still building. Connections only work after the line `[I2P] Tunnel is now ACTIVE` appears — first runs take several minutes (reseed + peer discovery). |
+| `[ERROR] Tunnel build failed (state: stopped)` | The target address is offline or mistyped, or (server mode) your Minecraft server is not listening on the configured `host:port`. Run `--check` on both machines. |
+| `[ERROR] Invalid destination format` | Run `java -jar minecraft-i2p.jar --check` — it shows exactly which line of the config is wrong and what format is expected. |
+| Server printed `(no address yet ...)` on first run | The key file wasn't created within 30 s (slow router or unwritable data dir). Run `--mode=server` again in a few minutes; `--print-address` works as soon as `minecraft-server.dat` exists. |
+| Players can't reach your server although it worked before | The `.dat` key was recreated — an old `minecraft-server.dat` was deleted or `keyFile` points elsewhere. The address follows the key; restore your backup. |
+| "Address already in use" at startup | Another program (or a local Minecraft server) holds the configured `port`. Change `port` in the config. |
+| Process dies instantly without any `[SHUTDOWN]` lines on Ctrl+C | The embedded router's kill-VM-on-end behavior (`setKillVMOnEnd`) changed in a future I2P build — the wrapper tries to disable it; if you see this, report it with the I2P version from `pom.xml`. |
+| Minecraft logins rejected / "Session cannot be verified" | `online-mode=false` is required in `server.properties` — Mojang auth is unreachable through I2P. |
 
 ---
 

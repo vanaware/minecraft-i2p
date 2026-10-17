@@ -27,6 +27,8 @@ import java.util.regex.Pattern;
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=X.b32.i2p
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --config=custom.properties
+ *   java -jar minecraft-i2p.jar --check            # validate config, no router
+ *   java -jar minecraft-i2p.jar --print-address    # print server address, no router
  *
  * The --enable-native-access flag only matters on JDK 24+ (it silences a
  * harmless jbigi warning); it is a no-op on JDK 17-23 and accepted by all
@@ -86,6 +88,8 @@ public class MinecraftI2P {
     private static String CONFIG_PATH = null;      // resolved in main
     private static String DEST_OVERRIDE = null;    // --dest=          (persists)
     private static String DEST_EPHEMERAL = null;   // --dest-override= (does not persist)
+    private static boolean CHECK_CONFIG = false;   // --check
+    private static boolean PRINT_ADDRESS = false;  // --print-address
 
     // ==========================================================
     // INSTANCE STATE
@@ -118,6 +122,10 @@ public class MinecraftI2P {
             } else if (arg.equals("--help") || arg.equals("-h")) {
                 printUsage();
                 System.exit(0);
+            } else if (arg.equals("--check")) {
+                CHECK_CONFIG = true;
+            } else if (arg.equals("--print-address")) {
+                PRINT_ADDRESS = true;
             } else {
                 printErr("[ERROR] Unrecognized option: " + arg);
                 printUsage();
@@ -133,6 +141,11 @@ public class MinecraftI2P {
         }
         if ((DEST_OVERRIDE != null || DEST_EPHEMERAL != null) && !MODE.equals("client")) {
             printErr("Error: --dest= and --dest-override= are only valid in client mode.");
+            System.exit(1);
+        }
+
+        if (CHECK_CONFIG && PRINT_ADDRESS) {
+            printErr("Error: use --check OR --print-address, not both.");
             System.exit(1);
         }
 
@@ -153,6 +166,10 @@ public class MinecraftI2P {
         if (CONFIG_PATH == null) {
             CONFIG_PATH = USER_DIR.resolve(DEFAULT_CONFIG_NAME).toString();
         }
+
+        // Offline commands: never start the router, never touch the log.
+        if (CHECK_CONFIG) System.exit(runCheck());
+        if (PRINT_ADDRESS) System.exit(runPrintAddress());
 
         initLogging();
 
@@ -218,6 +235,11 @@ public class MinecraftI2P {
         println("  --config=<file>            Custom .properties file.");
         println("                             Relative paths resolve against");
         println("                             the current directory.");
+        println("  --check                    Validate the config file and exit.");
+        println("                             No router started — for scripts/CI.");
+        println("  --print-address            Print the server's .b32.i2p address");
+        println("                             (from the key file) and exit.");
+        println("                             No router started — for scripts.");
         println("  --help, -h                 Show this help");
         println();
         println("Default files:");
@@ -459,6 +481,160 @@ public class MinecraftI2P {
         printErr("[CONFIG] Invalid boolean for " + key + ": '" + value
             + "'. Using default: " + defaultValue);
         return defaultValue;
+    }
+
+    // ==========================================================
+    // OFFLINE COMMANDS (--check / --print-address)
+    // No router, no tunnel, no log — safe for scripts and CI.
+    // ==========================================================
+    private static int runCheck() {
+        MinecraftI2P app = new MinecraftI2P();
+        println("[CHECK] Mode   : " + MODE.toUpperCase());
+        println("[CHECK] Config : " + CONFIG_PATH);
+        try {
+            app.loadConfig();
+        } catch (Exception e) {
+            printErr("[FAIL] Cannot read config: " + e.getMessage());
+            printErr("       (it is generated automatically on a normal run)");
+            return 1;
+        }
+        int failures = app.checkConfig();
+        if (failures == 0) {
+            println("[CHECK] All checks passed — ready to run.");
+            return 0;
+        }
+        println("[CHECK] " + failures + " problem(s) found (see [FAIL] lines above).");
+        return 1;
+    }
+
+    /** Returns the number of [FAIL] findings. */
+    private int checkConfig() {
+        int failures = 0;
+        println("[OK]   Config file readable");
+
+        println("[OK]   host = " + optional("host", "127.0.0.1"));
+
+        int port = optionalInt("port", 25565);
+        if (port >= 1 && port <= 65535) {
+            println("[OK]   port = " + port);
+        } else {
+            printErr("[FAIL] port out of range (1-65535): " + port);
+            failures++;
+        }
+
+        failures += checkLocationWritable(
+            optional("i2pConfigDir", USER_DIR.resolve("i2p_core").toString()),
+            "i2pConfigDir");
+
+        int inQ = optionalInt("inboundQuantity", 2);
+        int outQ = optionalInt("outboundQuantity", 2);
+        if (inQ < 1 || outQ < 1) {
+            println("[WARN] tunnel quantities below 1 are clamped to 1 at runtime");
+        } else {
+            println("[OK]   tunnel quantities = " + inQ + "/" + outQ);
+        }
+
+        if (optionalInt("warmupTimeoutSeconds", 300) < 0
+                || optionalInt("warmupCheckIntervalSeconds", 10) < 1) {
+            println("[WARN] warmup values are odd; defaults will effectively apply");
+        } else {
+            println("[OK]   warmup settings sane");
+        }
+
+        if (MODE.equals("client")) {
+            failures += checkClientSection();
+        } else {
+            failures += checkServerSection();
+        }
+        return failures;
+    }
+
+    private int checkClientSection() {
+        String destination = config.getProperty("destination");
+        if (destination == null || destination.isBlank()) {
+            printErr("[FAIL] destination is missing (client mode needs it)");
+            return 1;
+        }
+        destination = destination.trim();
+        if (destination.equals(PLACEHOLDER_DEST)) {
+            printErr("[FAIL] destination is still the placeholder — set it to");
+            printErr("       the server's .b32.i2p address (printed on the server");
+            printErr("       machine by: java -jar minecraft-i2p.jar --print-address)");
+            return 1;
+        }
+        if (!isValidDestination(destination)) {
+            printErr("[FAIL] invalid destination format: '" + destination + "'");
+            printErr("       Expected: 52 base32 chars (a-z, 2-7), optionally");
+            printErr("       followed by 'aaaa', then .b32.i2p");
+            return 1;
+        }
+        println("[OK]   destination = " + destination);
+        return 0;
+    }
+
+    private int checkServerSection() {
+        String keyFile = config.getProperty("keyFile");
+        if (keyFile == null || keyFile.isBlank()) {
+            printErr("[FAIL] keyFile is missing (server mode needs it)");
+            return 1;
+        }
+        Path path = Paths.get(keyFile.trim());
+        if (Files.exists(path)) {
+            try (InputStream in = Files.newInputStream(path)) {
+                net.i2p.data.Destination dst = net.i2p.data.Destination.create(in);
+                println("[OK]   key file readable — address = " + dst.toBase32());
+            } catch (Exception e) {
+                printErr("[FAIL] key file exists but cannot be parsed: " + e);
+                printErr("       (a corrupted .dat means a lost address — restore your backup!)");
+                return 1;
+            }
+        } else {
+            println("[OK]   key file absent — will be created on the first server run");
+            Path parent = path.toAbsolutePath().getParent();
+            if (parent == null) return 0;
+            return checkLocationWritable(parent.toString(), "keyFile location");
+        }
+        return 0;
+    }
+
+    /**
+     * A path need not exist yet (config dir, key file) — but an existing
+     * ancestor must be writable or creation will fail at the worst moment.
+     */
+    private int checkLocationWritable(String pathStr, String label) {
+        Path probe = Paths.get(pathStr).toAbsolutePath();
+        while (probe != null && !Files.exists(probe)) probe = probe.getParent();
+        if (probe == null || !Files.isWritable(probe)) {
+            printErr("[FAIL] " + label + " is not in a writable location: " + pathStr);
+            return 1;
+        }
+        println("[OK]   " + label + " location writable");
+        return 0;
+    }
+
+    /**
+     * Prints ONLY the address on stdout (no decorations) so it can be used
+     * in scripts: ADDRESS=$(java -jar minecraft-i2p.jar --print-address).
+     */
+    private static int runPrintAddress() {
+        MinecraftI2P app = new MinecraftI2P();
+        try {
+            app.loadConfig();
+        } catch (Exception e) {
+            printErr("[ERROR] Cannot read config: " + e.getMessage());
+            printErr("        (run the wrapper normally once to generate it)");
+            return 1;
+        }
+        String b32 = app.getServerB32Address();
+        if (b32 == null) {
+            printErr("[ERROR] Server address not available.");
+            printErr("        The key file does not exist yet — run");
+            printErr("        java -jar minecraft-i2p.jar --mode=server");
+            printErr("        on the server machine first.");
+            return 1;
+        }
+        OUT.println(b32);
+        return 0;
     }
 
     // ==========================================================
