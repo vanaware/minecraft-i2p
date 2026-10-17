@@ -27,7 +27,15 @@ user, keeping the wrapper focused on one job: **networking**.
 
 ## Requirements
 
-- **Java 17 or newer** (JDK or JRE).
+- **Java 17 or newer** (JDK or JRE) to run. **JDK 24 or newer is
+  recommended.**
+- About `--enable-native-access=ALL-UNNAMED`, which appears in the examples
+  below: it only matters on **JDK 24+**, where it silences a harmless
+  "restricted method" warning emitted when I2P's `jbigi` library loads
+  native code. On **JDK 17–23** the flag has no effect and can be omitted;
+  on the oldest JDKs it is not recognized and the JVM refuses to start — if
+  that happens, simply drop the flag. Everything works identically either
+  way.
 - The following I2P JARs on the classpath (bundled in `lib/` or shaded into the JAR):
   - `i2p.jar`
   - `router.jar`
@@ -56,7 +64,11 @@ Place `minecraft-i2p.jar` next to a `lib/` directory containing the I2P JARs lis
 Connect to a hidden Minecraft server:
 
 ```bash
+# JDK 24+ (recommended setup — silences the jbigi warning)
 java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=myserver.b32.i2p
+
+# JDK 17–23 (the flag is a no-op there; omit it)
+java -jar minecraft-i2p.jar --dest=myserver.b32.i2p
 ```
 
 The first run generates `~/.minecraft-i2p/minecraft-i2p.properties` with the
@@ -66,7 +78,9 @@ destination saved. Subsequent runs just need:
 java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar
 ```
 
-When the console prints **READY TO PLAY**, open Minecraft and connect to
+When the console prints **READY TO PLAY**, wait for the line
+**`[I2P] Tunnel is now ACTIVE`** (first runs can take a few minutes while the
+router joins the network), then open Minecraft and connect to
 `127.0.0.1:25565`.
 
 ### Server mode
@@ -90,7 +104,9 @@ java -Xmx2G -jar server.jar nogui
 Set `online-mode=false` in `server.properties` — Mojang authentication does not
 work through I2P proxies.
 
-Share the `.b32.i2p` address derived from your key file with your players.
+Share the `.b32.i2p` address derived from your key file with your players —
+it is printed in the **SERVER READY** block (see
+[Getting the Server's `.b32.i2p` Address](#getting-the-servers-b32i2p-address)).
 
 ### Command-line options
 
@@ -99,7 +115,7 @@ Share the `.b32.i2p` address derived from your key file with your players.
 | `--mode=client\|server` | Operation mode. Default: `client`. |
 | `--dest=<b32.i2p>` | Target address. **Client mode only.** **Persists** to the config file. |
 | `--dest-override=<b32.i2p>` | Target address. **Client mode only.** **Does not persist** — useful for testing. |
-| `--config=<file>` | Use a custom `.properties` file. |
+| `--config=<file>` | Use a custom `.properties` file. Relative paths resolve against the current directory (not `~/.minecraft-i2p/`). |
 | `--help`, `-h` | Show usage. |
 
 ### Examples
@@ -139,6 +155,8 @@ Contents:
 ~/.minecraft-i2p/
 ├── minecraft-i2p.properties      # configuration (editable)
 ├── minecraft-server.dat          # server private key (BACKUP!)
+├── logs/
+│   └── minecraft-i2p.log         # wrapper log (auto-rotated, keep for support)
 └── i2p_core/                     # I2P router state (regenerable)
     ├── router.config
     ├── netDb/
@@ -211,7 +229,7 @@ minecraft-i2p/
 │   └── lib/
 │       └── i2ptunnel.jar          # installed into the local Maven repo (see below)
 ├── target/                        # Maven build output
-│   └── minecraft-i2p-1.1.1.jar    # shaded fat JAR (executable)
+│   └── minecraft-i2p-1.1.2.jar    # shaded fat JAR (executable)
 └── dist/
     └── minecraft-i2p.jar          # renamed copy of the fat JAR for distribution
 ```
@@ -229,12 +247,12 @@ in your Maven repository. The other I2P dependencies are resolved from Maven Cen
 
 ### Run
 
-The shaded fat JAR is produced at `target/minecraft-i2p-1.1.1.jar`
+The shaded fat JAR is produced at `target/minecraft-i2p-1.1.2.jar`
 (the version number comes from `pom.xml`):
 
 ```bash
-java -jar target/minecraft-i2p-1.1.1.jar --dest=myserver.b32.i2p
-java -jar target/minecraft-i2p-1.1.1.jar --mode=server
+java -jar target/minecraft-i2p-1.1.2.jar --dest=myserver.b32.i2p
+java -jar target/minecraft-i2p-1.1.2.jar --mode=server
 ```
 
 For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:
@@ -260,8 +278,13 @@ the server's `.b32.i2p` address — **the wrapper prints it directly** in the
 Share it with your players — they use it with:
 
 ```bash
-java -jar minecraft-i2p.jar --dest=<that-address>.b32.i2p
+java -jar minecraft-i2p.jar --dest=<that-address>
 ```
+
+On the very first server run the `.dat` key file does not exist yet — the
+wrapper waits up to 30 seconds for the background tunnel to create it,
+printing `(generating the key, please wait...)` inside the box meanwhile.
+On subsequent runs the address appears instantly.
 
 The address is stable as long as `minecraft-server.dat` is unchanged (it is
 reprinted on every server-mode run). Note that the I2P **web console is not
@@ -284,6 +307,10 @@ it; everything the wrapper prints is in the terminal.
 - **First run is slow.** The I2P router needs to bootstrap into the network
   (reseed + peer discovery). This can take several minutes. Subsequent runs
   are much faster because the state is cached in `i2p_core/`.
+- **Tunnels build in the background.** The wrapper registers the tunnel and
+  prints `[I2P] Tunnel is now ACTIVE` when it succeeds — Minecraft
+  connections fail until then. If it never appears, check
+  `~/.minecraft-i2p/logs/minecraft-i2p.log`.
 
 ---
 
@@ -292,10 +319,22 @@ it; everything the wrapper prints is in the terminal.
 Requires **JDK 17 or newer** and **Maven**. Example installation on Debian/Ubuntu:
 
 ```sh
-sudo apt install openjdk-25-jdk maven
-java -version    # must report 25 or newer
+# Debian 12 (Bookworm)
+sudo apt install openjdk-17-jdk maven
+
+# Debian 13 (Trixie) or newer — JDK 17 is gone; use the default
+sudo apt install default-jdk maven
+
+# Verify
+java -version    # must report 17 or newer
 mvn -version
 ```
+
+> On newer Debian/Ubuntu releases the OpenJDK 17 package may have been
+> removed in favor of newer JDKs. `default-jdk` always installs the current
+> supported default (JDK 21 on Debian 13). JDK 21 runs everything fine —
+> just omit the `--enable-native-access` flag (see
+> [Requirements](#requirements)).
 
 If you have multiple JDKs installed, select the default with:
 

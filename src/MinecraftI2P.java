@@ -8,6 +8,7 @@ import net.i2p.app.ClientAppManager;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.io.PrintWriter;
 import java.io.Reader;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +27,9 @@ import java.util.regex.Pattern;
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=X.b32.i2p
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server
  *   java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --config=custom.properties
+ *
+ * The --enable-native-access flag only matters on JDK 24+ (it silences a
+ * harmless jbigi warning); omit it on JDK 17-23.
  *
  * Default files (all under ~/.minecraft-i2p/):
  *   minecraft-i2p.properties   - editable configuration
@@ -48,6 +52,14 @@ public class MinecraftI2P {
     private static final String TUNNEL_LENGTH = "1"; // hardcoded
     private static final String PLACEHOLDER_DEST = "REPLACE_WITH_YOUR_ADDRESS.b32.i2p";
 
+    // Persistent wrapper log (support): every println/printErr line is also
+    // appended to ~/.minecraft-i2p/logs/minecraft-i2p.log with a timestamp.
+    // Simple rotation: past LOG_MAX_BYTES the file moves to *.old (one
+    // generation kept — plenty for diagnosing the last run).
+    private static final long LOG_MAX_BYTES = 1024 * 1024;
+    private static PrintWriter logWriter;
+    private static Path logPath;
+
     // Captured at class-load, BEFORE the Router is created: I2P replaces /
     // re-buffers the system streams once the router starts, and prints made
     // through System.out afterwards can end up in a buffer that is never
@@ -56,9 +68,15 @@ public class MinecraftI2P {
     private static final PrintStream OUT = System.out;
     private static final PrintStream ERR = System.err;
 
-    private static void println(String s) { OUT.println(s); }
+    private static void println(String s) { OUT.println(s); logLine(s); }
     private static void println() { OUT.println(); }
-    private static void printErr(String s) { ERR.println(s); }
+    private static void printErr(String s) {
+        ERR.println(s);
+        // Prefix only untagged lines — tagged output like [SHUTDOWN] or
+        // [I2P] already identifies itself; "[ERROR] [SHUTDOWN] ..." in the
+        // log would be redundant noise.
+        logLine(s.startsWith("[") ? s : "[ERROR] " + s);
+    }
 
     // ==========================================================
     // STATIC STATE (arg parsing)
@@ -135,6 +153,8 @@ public class MinecraftI2P {
             CONFIG_PATH = USER_DIR.resolve(DEFAULT_CONFIG_NAME).toString();
         }
 
+        initLogging();
+
         MinecraftI2P app = new MinecraftI2P();
         try {
             app.start();
@@ -154,12 +174,34 @@ public class MinecraftI2P {
      * Catches typos early with a clear message instead of a cryptic failure
      * deep inside the tunnel code.
      */
+    private static boolean isValidDestination(String dest) {
+        return dest.matches("[a-z2-7]{52}(?:aaaa)?\\.b32\\.i2p");
+    }
+
+    /**
+     * Command-line validation: nothing is initialized yet, so exiting
+     * directly is safe and gives the clearest error.
+     */
     private static void validateDestination(String dest) {
-        if (!dest.matches("[a-z2-7]{52}(?:aaaa)?\\.b32\\.i2p")) {
+        if (!isValidDestination(dest)) {
             printErr("[ERROR] Invalid destination format: '" + dest + "'");
             printErr("        Expected: 52 base32 chars (a-z, 2-7), optionally");
             printErr("        followed by 'aaaa', then .b32.i2p");
             System.exit(1);
+        }
+    }
+
+    /**
+     * Config-file validation: the router and hooks may already be live by
+     * the time setup runs, so throw instead of System.exit() — main's
+     * catch handles cleanup consistently.
+     */
+    private static void validateDestinationOrThrow(String dest) throws IOException {
+        if (!isValidDestination(dest)) {
+            throw new IOException("Invalid destination format in config: '" + dest + "'.\n"
+                + "        Expected: 52 base32 chars (a-z, 2-7), optionally\n"
+                + "        followed by 'aaaa', then .b32.i2p\n"
+                + "        Edit " + CONFIG_PATH + " to fix it.");
         }
     }
 
@@ -172,7 +214,9 @@ public class MinecraftI2P {
         println("                             Persists to config.");
         println("  --dest-override=<b32.i2p>  Target address. CLIENT mode only.");
         println("                             Does NOT persist.");
-        println("  --config=<file>            Custom .properties file");
+        println("  --config=<file>            Custom .properties file.");
+        println("                             Relative paths resolve against");
+        println("                             the current directory.");
         println("  --help, -h                 Show this help");
         println();
         println("Default files:");
@@ -184,6 +228,11 @@ public class MinecraftI2P {
         println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest=myserver.b32.i2p");
         println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --dest-override=test.b32.i2p");
         println("  java --enable-native-access=ALL-UNNAMED -jar minecraft-i2p.jar --mode=server");
+        println();
+        println("Note:");
+        println("  --enable-native-access only matters on JDK 24+ (it silences");
+        println("  a harmless jbigi warning). Omit it on JDK 17-23; on older");
+        println("  JDKs it is unrecognized and the JVM will not start.");
     }
 
     // ==========================================================
@@ -301,6 +350,16 @@ public class MinecraftI2P {
         Path i2pCorePath = USER_DIR.resolve("i2p_core");
         Path keyFilePath = USER_DIR.resolve(DEFAULT_KEY_NAME);
 
+        // Windows paths use backslashes, but this file is parsed later by
+        // Properties.load(), which treats '\' as an escape character
+        // ("\U" -> "U", "\n" -> newline, ...) — the raw path would come back
+        // corrupted on the next run. Forward slashes work identically: every
+        // consumer of these values goes through Paths.get()/java I/O, which
+        // accept them on Windows too. (Properties.store() would escape them
+        // for us, but we write this file by hand to keep the comments.)
+        String i2pCoreStr = i2pCorePath.toString().replace('\\', '/');
+        String keyFileStr = keyFilePath.toString().replace('\\', '/');
+
         return "# =========================================================\n"
             + "# minecraft-i2p - Unified Configuration\n"
             + "# =========================================================\n"
@@ -318,7 +377,7 @@ public class MinecraftI2P {
             + "\n"
             + "# I2P router state directory (can be deleted,\n"
             + "# but this forces a full reseed on next run).\n"
-            + "i2pConfigDir = " + i2pCorePath + "\n"
+            + "i2pConfigDir = " + i2pCoreStr + "\n"
             + "\n"
             + "# I2P network warmup\n"
             + "warmupTimeoutSeconds = 300\n"
@@ -343,7 +402,7 @@ public class MinecraftI2P {
             + "# ---------- SERVER ----------\n"
             + "# Private key file (SERVER mode)\n"
             + "# WARNING: back it up! This file defines your .b32.i2p address.\n"
-            + "keyFile = " + keyFilePath + "\n"
+            + "keyFile = " + keyFileStr + "\n"
             + "\n"
             + "# Friendly key name (shown in I2P as the destination name)\n"
             + "keyName = minecraft-server\n";
@@ -401,6 +460,46 @@ public class MinecraftI2P {
     }
 
     // ==========================================================
+    // WRAPPER LOG
+    // ==========================================================
+    private static void initLogging() {
+        try {
+            Path dir = USER_DIR.resolve("logs");
+            Files.createDirectories(dir);
+            Path file = dir.resolve("minecraft-i2p.log");
+            if (Files.exists(file) && Files.size(file) > LOG_MAX_BYTES) {
+                Files.move(file, dir.resolve("minecraft-i2p.log.old"),
+                    StandardCopyOption.REPLACE_EXISTING);
+            }
+            logPath = file;
+            logWriter = new PrintWriter(
+                Files.newBufferedWriter(file, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND),
+                true); // autoFlush — crash-resilient
+        } catch (IOException e) {
+            // Logging is best-effort: never stop the app because of it.
+            logWriter = null;
+            logPath = null;
+        }
+    }
+
+    private static void logLine(String s) {
+        PrintWriter w = logWriter;
+        if (w == null) return;
+        // Timestamp every line so entries stay in order even when the
+        // console text is indistinguishable (repeated waits, blank-ish lines).
+        w.println(new java.util.Date() + " " + s);
+    }
+
+    private static void closeLogging() {
+        PrintWriter w = logWriter;
+        if (w != null) {
+            logWriter = null;
+            w.close();
+        }
+    }
+
+    // ==========================================================
     // BANNER
     // ==========================================================
     private void printBanner() {
@@ -409,6 +508,7 @@ public class MinecraftI2P {
         println("  Mode   : " + MODE.toUpperCase());
         println("  Config : " + CONFIG_PATH);
         println("  Data   : " + USER_DIR);
+        if (logPath != null) println("  Log    : " + logPath);
         println("  Length : " + TUNNEL_LENGTH + " (fixed)");
         println("========================================");
     }
@@ -519,7 +619,7 @@ public class MinecraftI2P {
                     + "Edit " + CONFIG_PATH + " and set 'destination = <server>.b32.i2p',\n"
                     + "or run with: --dest=<server>.b32.i2p");
             }
-            validateDestination(destination);
+            validateDestinationOrThrow(destination);
         }
 
         boolean sharedClient = optionalBool("sharedClient", true);
@@ -545,7 +645,7 @@ public class MinecraftI2P {
         opts.setProperty(TunnelController.PROP_SHARED, String.valueOf(sharedClient));
 
         startController(opts);
-        println("[I2P] Client tunnel active.");
+        println("[I2P] Client tunnel registered — building in the background...");
     }
 
     private void setupServerTunnel(Properties opts, String host, int port) throws IOException {
@@ -563,7 +663,16 @@ public class MinecraftI2P {
             println("[I2P] New key. Will be created at: " + keyPath.toAbsolutePath());
             Path parent = keyPath.toAbsolutePath().getParent();
             if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent);
+                try {
+                    Files.createDirectories(parent);
+                } catch (IOException e) {
+                    // Raw exceptions from here surface as just the path
+                    // ("[ERROR] /nonexistent-dir") — say what failed and where
+                    // to fix it.
+                    throw new IOException("Cannot create the directory for 'keyFile': "
+                        + parent + " (" + e + ")\n"
+                        + "        Fix the keyFile entry in " + CONFIG_PATH, e);
+                }
             }
         } else {
             println("[I2P] Key found. Address preserved.");
@@ -579,7 +688,7 @@ public class MinecraftI2P {
         opts.setProperty("keyName", keyName);
 
         startController(opts);
-        println("[I2P] Server tunnel active.");
+        println("[I2P] Server tunnel registered — building in the background...");
     }
 
     private String inboundQuantityStr(Properties opts) {
@@ -631,6 +740,69 @@ public class MinecraftI2P {
         } catch (Exception e) {
             throw new IOException("Failed to start I2P tunnel: " + e, e);
         }
+
+        startTunnelMonitor();
+    }
+
+    /**
+     * startTunnelBackground() returns before the tunnel exists, so the
+     * wrapper would otherwise claim "active" and stay silent while the real
+     * build succeeds or fails asynchronously. This watcher reports the
+     * outcome: ACTIVE when the tunnel comes up, and a warning if it never
+     * does (unreachable destination, router still reseeding).
+     */
+    private void startTunnelMonitor() {
+        Thread monitor = new Thread(() -> {
+            final int maxWaitSec = 600;   // first run (reseed) can be slow
+            final int pollMs = 2000;
+            // Floor at 1s: a sub-second pollMs would make pollMs/1000 == 0
+            // and the loop counter would never advance (infinite loop).
+            final int pollSec = Math.max(1, pollMs / 1000);
+            boolean sixtySecsNoted = false;
+            for (int waited = 0; waited < maxWaitSec && running; waited += pollSec) {
+                if (routerFailure.get() != null) {
+                    printErr("[ERROR] Router failed — the tunnel will not come up.");
+                    return;
+                }
+                boolean starting = tunnelController.getIsStarting();
+                boolean isRunning = tunnelController.getIsRunning();
+                if (isRunning) {
+                    println("[I2P] Tunnel is now ACTIVE — connections can flow.");
+                    return;
+                }
+                // Neither starting nor running (after a grace period for the
+                // background thread to flip the state) means it gave up:
+                // STOPPED/DESTROYED — a real failure, not just slow.
+                if (!starting && waited >= 10) {
+                    printErr("[ERROR] Tunnel build failed (state: stopped). Common causes:");
+                    printErr("        - the target address is offline or mistyped");
+                    printErr("        - the router has not finished joining I2P yet");
+                    printErr("        Check the log: " + logPath);
+                    return;
+                }
+                // Flag instead of waited == 60: exact equality would break if
+                // pollMs ever stopped dividing evenly into 60.
+                if (!sixtySecsNoted && waited >= 60) {
+                    println("[I2P] Tunnel still building — first runs take a few");
+                    println("      minutes while the router joins the network.");
+                    sixtySecsNoted = true;
+                }
+                try {
+                    Thread.sleep(pollMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (running) {
+                println("[I2P] NOTE: tunnel is still not active after "
+                    + (maxWaitSec / 60) + " minutes. Minecraft connections");
+                println("      will fail until it is. It keeps retrying in the");
+                println("      background — watch for the ACTIVE message.");
+            }
+        }, "Tunnel-Monitor");
+        monitor.setDaemon(true);
+        monitor.start();
     }
 
     // ==========================================================
@@ -669,7 +841,8 @@ public class MinecraftI2P {
             }
         }
 
-        printErr("[WARMUP] Timeout waiting for router. Proceeding anyway.");
+        println("[WARMUP] Timeout waiting for router. Continuing — the tunnel");
+        println("         will build as the network comes up.");
     }
 
     private boolean isRouterAlive() {
@@ -694,7 +867,9 @@ public class MinecraftI2P {
         println("  1. Open Minecraft Java Edition");
         println("  2. Add a server at:");
         println("       " + host + ":" + port);
-        println("  3. Connect.");
+        println("  3. Connect — but WAIT for the line");
+        println("       '[I2P] Tunnel is now ACTIVE' below");
+        println("       first (first runs take a few minutes).");
         println();
         println("  Keep this window open while playing.");
         println("  Press Ctrl+C to stop.");
@@ -739,16 +914,23 @@ public class MinecraftI2P {
      * of showing "not available" for something that appears seconds later.
      */
     private String waitForServerB32Address(int maxWaitSec) {
-        println("[I2P] Waiting for the private key to be generated...");
+        // Only announce the wait when there actually is one — on every run
+        // after the first the key already exists and this returns instantly.
+        String b32 = getServerB32Address();
+        if (b32 != null) return b32;
+        // Box-friendly wording: this only ever prints inside the indented
+        // SERVER READY block, so match its style instead of the [I2P] log
+        // prefix used elsewhere.
+        println("  (generating the key, please wait...)");
         for (int waited = 0; waited < maxWaitSec; waited++) {
-            String b32 = getServerB32Address();
-            if (b32 != null) return b32;
             try {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             }
+            b32 = getServerB32Address();
+            if (b32 != null) return b32;
         }
         return getServerB32Address();
     }
@@ -788,10 +970,17 @@ public class MinecraftI2P {
             println("\n[SHUTDOWN] Stopping I2P services...");
 
             if (tunnelController != null) {
+                // stopTunnel() can block while a background build is in
+                // flight — run it with a deadline. The router shutdown
+                // tears tunnels down anyway, so we never wait long.
+                Thread stopper = new Thread(tunnelController::stopTunnel, "Tunnel-Stopper");
+                stopper.setDaemon(true);
+                stopper.start();
                 try {
-                    tunnelController.stopTunnel();
-                } catch (Exception e) {
-                    printErr("[SHUTDOWN] Error stopping tunnel: " + e.getMessage());
+                    stopper.join(5000);
+                    if (stopper.isAlive()) println("[SHUTDOWN] Tunnel stop timed out; router shutdown will finish it.");
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 }
             }
 
@@ -807,6 +996,7 @@ public class MinecraftI2P {
             }
 
             println("[SHUTDOWN] Done.");
+            closeLogging();
         }
     }
 }
