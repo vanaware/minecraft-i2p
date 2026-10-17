@@ -176,7 +176,7 @@ documented inline. Key points:
 
 | Key | Default | Description |
 |---|---|---|
-| `tunnelName` | `Minecraft` | Friendly name shown in the I2P console. |
+| `tunnelName` | `Minecraft` | Friendly tunnel name (used in I2P logs; the web console is not bundled). |
 | `inboundQuantity` | `2` | Number of inbound tunnels. Higher = more throughput. |
 | `outboundQuantity` | `2` | Number of outbound tunnels. Higher = more throughput. |
 
@@ -211,7 +211,7 @@ minecraft-i2p/
 │   └── lib/
 │       └── i2ptunnel.jar          # installed into the local Maven repo (see below)
 ├── target/                        # Maven build output
-│   └── minecraft-i2p-1.0.1.jar    # shaded fat JAR (executable)
+│   └── minecraft-i2p-1.1.0.jar    # shaded fat JAR (executable)
 └── dist/
     └── minecraft-i2p.jar          # renamed copy of the fat JAR for distribution
 ```
@@ -229,12 +229,12 @@ in your Maven repository. The other I2P dependencies are resolved from Maven Cen
 
 ### Run
 
-The shaded fat JAR is produced at `target/minecraft-i2p-1.0.1.jar`
+The shaded fat JAR is produced at `target/minecraft-i2p-1.1.0.jar`
 (the version number comes from `pom.xml`):
 
 ```bash
-java -jar target/minecraft-i2p-1.0.1.jar --dest=myserver.b32.i2p
-java -jar target/minecraft-i2p-1.0.1.jar --mode=server
+java -jar target/minecraft-i2p-1.1.0.jar --dest=myserver.b32.i2p
+java -jar target/minecraft-i2p-1.1.0.jar --mode=server
 ```
 
 For daily use, copy/rename it (e.g. to `dist/minecraft-i2p.jar`) and run:
@@ -248,15 +248,25 @@ java -jar dist/minecraft-i2p.jar --dest=myserver.b32.i2p
 ## Getting the Server's `.b32.i2p` Address
 
 When you run in server mode for the first time, the wrapper creates
-`~/.minecraft-i2p/minecraft-server.dat`. The I2P router will announce a
-`.b32.i2p` address derived from this key.
+`~/.minecraft-i2p/minecraft-server.dat`. The private key fully determines
+the server's `.b32.i2p` address — **the wrapper prints it directly** in the
+**SERVER READY** block, e.g.:
 
-To find the address, look for it in the I2P router console or the wrapper's
-logs. Share it with your players — they will use it with:
+```
+  --- Your server's .b32.i2p address ---
+  zr25cum...y4ta.b32.i2p
+```
+
+Share it with your players — they use it with:
 
 ```bash
 java -jar minecraft-i2p.jar --dest=<that-address>.b32.i2p
 ```
+
+The address is stable as long as `minecraft-server.dat` is unchanged (it is
+reprinted on every server-mode run). Note that the I2P **web console is not
+available** in this fat-JAR setup (no bundled Jetty webapps) — you never need
+it; everything the wrapper prints is in the terminal.
 
 ---
 
